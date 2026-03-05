@@ -54,6 +54,7 @@ const CSS = `
     padding: 40px 20px;
   }
   .card {
+    position: relative;
     background: #1a1a2e;
     border: 1px solid #2e2e50;
     border-radius: 16px;
@@ -61,6 +62,19 @@ const CSS = `
     width: 300px;
     box-shadow: 0 0 30px rgba(180,79,255,0.1);
   }
+  .remove-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: none;
+    border: none;
+    color: #555;
+    font-size: 1.2rem;
+    cursor: pointer;
+    line-height: 1;
+    text-decoration: none;
+  }
+  .remove-btn:hover { color: #ff4444; }
   .card h2 {
     font-size: 1.2rem;
     margin-bottom: 4px;
@@ -129,12 +143,12 @@ const CSS = `
   .add-friend a:hover { background: #b44fff; color: #000; }
 `;
 
-// Kullanıcı verilerini hafızada tutuyoruz
 const users = {};
 
 app.get('/', (req, res) => {
   const userCards = Object.values(users).map(u => `
     <div class="card">
+      <a class="remove-btn" href="/remove/${u.id}" title="Kaldır">✕</a>
       <h2>${u.display_name}</h2>
       <div class="username">@${u.id}</div>
       <h3>🎵 Güncel İlk 5 Şarkın</h3>
@@ -234,6 +248,12 @@ app.get('/callback', async (req, res) => {
     console.error(err.response?.data || err.message);
     res.send('Bir hata oluştu.');
   }
+});
+
+app.get('/remove/:userId', (req, res) => {
+  const userId = req.params.userId;
+  delete users[userId];
+  res.redirect('/');
 });
 
 const PORT = process.env.PORT || 3000;
