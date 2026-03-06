@@ -277,7 +277,6 @@ app.get('/', async (req, res) => {
   const timeRange = req.query.time || 'short_term';
   const userList = Object.values(users);
 
-  // Her kullanıcı için seçilen zaman dilimine göre veriyi çek
   const updatedUsers = await Promise.all(userList.map(async u => {
     if (u.dataByRange && u.dataByRange[timeRange]) {
       return { ...u, ...u.dataByRange[timeRange] };
@@ -463,4 +462,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Sunucu çalışıyor: port ${PORT}`);
 });
-```
