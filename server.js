@@ -245,6 +245,21 @@ const CSS = `
 
 const users = {};
 
+async function fetchUserData(accessToken, timeRange) {
+  const [tracksRes, artistsRes] = await Promise.all([
+    axios.get(`https://api.spotify.com/v1/me/top/tracks?limit=5&time_range=${timeRange}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }),
+    axios.get(`https://api.spotify.com/v1/me/top/artists?limit=5&time_range=${timeRange}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    })
+  ]);
+  return {
+    topTracks: tracksRes.data.items,
+    topArtists: artistsRes.data.items,
+  };
+}
+
 function getCommonItems(userList, key, idKey) {
   if (userList.length < 2) return [];
   const sets = userList.map(u => new Set(u[key].map(i => i[idKey])));
@@ -258,15 +273,29 @@ function getCommonItems(userList, key, idKey) {
   });
 }
 
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
   const timeRange = req.query.time || 'short_term';
-  const timeLabels = { short_term: 'Son 4 Hafta', medium_term: 'Son 6 Ay', long_term: 'Tüm Zamanlar' };
   const userList = Object.values(users);
 
-  const commonTracks = getCommonItems(userList, 'topTracks', 'id');
-  const commonArtists = getCommonItems(userList, 'topArtists', 'id');
+  // Her kullanıcı için seçilen zaman dilimine göre veriyi çek
+  const updatedUsers = await Promise.all(userList.map(async u => {
+    if (u.dataByRange && u.dataByRange[timeRange]) {
+      return { ...u, ...u.dataByRange[timeRange] };
+    }
+    try {
+      const data = await fetchUserData(u.accessToken, timeRange);
+      if (!u.dataByRange) u.dataByRange = {};
+      u.dataByRange[timeRange] = data;
+      return { ...u, ...data };
+    } catch {
+      return u;
+    }
+  }));
 
-  const userCards = userList.map(u => `
+  const commonTracks = getCommonItems(updatedUsers, 'topTracks', 'id');
+  const commonArtists = getCommonItems(updatedUsers, 'topArtists', 'id');
+
+  const userCards = updatedUsers.map(u => `
     <div class="card">
       <a class="remove-btn" href="/remove/${u.id}" title="Kaldır">✕</a>
       <div class="profile">
@@ -278,8 +307,8 @@ app.get('/', (req, res) => {
           <div class="username">@${u.id}</div>
         </div>
       </div>
-      <h3>🎵 Güncel İlk 5 Şarkın</h3>
-      ${u.topTracks.map((t, i) => `
+      <h3>🎵 İlk 5 Şarkın</h3>
+      ${(u.topTracks || []).map((t, i) => `
         <a class="spotify-link" href="${t.external_urls.spotify}" target="_blank">
           <div class="track-item">
             <span class="rank">${i + 1}</span>
@@ -291,8 +320,8 @@ app.get('/', (req, res) => {
           </div>
         </a>
       `).join('')}
-      <h3>🎤 Güncel İlk 5 Sanatçın</h3>
-      ${u.topArtists.map((a, i) => `
+      <h3>🎤 İlk 5 Sanatçın</h3>
+      ${(u.topArtists || []).map((a, i) => `
         <a class="spotify-link" href="${a.external_urls.spotify}" target="_blank">
           <div class="artist-item">
             <span class="rank">${i + 1}</span>
@@ -303,7 +332,7 @@ app.get('/', (req, res) => {
           </div>
         </a>
       `).join('')}
-      <a class="btn btn-secondary" href="/refresh/${u.id}" style="display:block;text-align:center;margin-top:16px;font-size:0.8rem;">🔄 Yenile</a>
+      <a class="btn btn-secondary" href="/refresh/${u.id}?time=${timeRange}" style="display:block;text-align:center;margin-top:16px;font-size:0.8rem;">🔄 Yenile</a>
     </div>
   `).join('');
 
@@ -350,7 +379,7 @@ app.get('/', (req, res) => {
       <div class="cards">
         ${userCards.length > 0 ? userCards : '<p class="empty">Henüz kimse eklenmedi. Yukarıdan hesap ekle!</p>'}
       </div>
-      ${userList.length >= 2 ? `
+      ${updatedUsers.length >= 2 ? `
         <div class="common-section">
           <h2>🤝 Ortak Şarkılar</h2>
           <div class="common-grid">${commonTracksHTML}</div>
@@ -387,16 +416,11 @@ app.get('/callback', async (req, res) => {
 
     const accessToken = tokenRes.data.access_token;
 
-    const [profileRes, tracksRes, artistsRes] = await Promise.all([
+    const [profileRes, data] = await Promise.all([
       axios.get('https://api.spotify.com/v1/me', {
         headers: { Authorization: `Bearer ${accessToken}` }
       }),
-      axios.get('https://api.spotify.com/v1/me/top/tracks?limit=5&time_range=short_term', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      }),
-      axios.get('https://api.spotify.com/v1/me/top/artists?limit=5&time_range=short_term', {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      })
+      fetchUserData(accessToken, 'short_term')
     ]);
 
     const userId = profileRes.data.id;
@@ -405,8 +429,8 @@ app.get('/callback', async (req, res) => {
       display_name: profileRes.data.display_name,
       avatar: profileRes.data.images?.[0]?.url || null,
       accessToken,
-      topTracks: tracksRes.data.items,
-      topArtists: artistsRes.data.items,
+      dataByRange: { short_term: data },
+      ...data
     };
 
     res.redirect('/');
@@ -417,23 +441,17 @@ app.get('/callback', async (req, res) => {
 });
 
 app.get('/refresh/:userId', async (req, res) => {
+  const timeRange = req.query.time || 'short_term';
   const user = users[req.params.userId];
   if (!user) return res.redirect('/');
   try {
-    const [tracksRes, artistsRes] = await Promise.all([
-      axios.get('https://api.spotify.com/v1/me/top/tracks?limit=5&time_range=short_term', {
-        headers: { Authorization: `Bearer ${user.accessToken}` }
-      }),
-      axios.get('https://api.spotify.com/v1/me/top/artists?limit=5&time_range=short_term', {
-        headers: { Authorization: `Bearer ${user.accessToken}` }
-      })
-    ]);
-    user.topTracks = tracksRes.data.items;
-    user.topArtists = artistsRes.data.items;
+    const data = await fetchUserData(user.accessToken, timeRange);
+    if (!user.dataByRange) user.dataByRange = {};
+    user.dataByRange[timeRange] = data;
   } catch (err) {
     console.error(err.response?.data || err.message);
   }
-  res.redirect('/');
+  res.redirect(`/?time=${timeRange}`);
 });
 
 app.get('/remove/:userId', (req, res) => {
@@ -445,3 +463,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Sunucu çalışıyor: port ${PORT}`);
 });
+```
